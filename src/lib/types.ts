@@ -70,6 +70,21 @@ export type ScoredProgram = {
   program: Program;
   section: FundingSection;
   score: number;
+  scoreBand: "Core fit" | "Strong fit" | "Conditional fit" | "Possible but limited" | "Low fit";
   reasons: string[];
+  reasonCodes: string[];
+  cautions: string[];
+  nextSteps: string[];
+};
+
+export type ReadinessSignal = {
+  score: number;
+  band:
+    | "Strong early-stage concept"
+    | "Promising but needs partner commitments"
+    | "Concept needs structuring"
+    | "Early exploration"
+    | "Not yet finance-ready";
+  drivers: string[];
   cautions: string[];
 };

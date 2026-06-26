@@ -13,6 +13,7 @@ import {
   Info,
   Landmark,
   Layers3,
+  ListChecks,
   Link as LinkIcon,
   MapPinned,
   PieChart,
@@ -24,8 +25,9 @@ import {
   Wand2
 } from "lucide-react";
 import programsData from "@/data/programs.json";
-import { buildCapitalStackEstimate, formatCurrency, type CapitalStackEstimate } from "@/lib/capitalStack";
+import { buildCapitalStackEstimate, formatCurrency, type CapitalStackEstimate, type StackLine } from "@/lib/capitalStack";
 import {
+  buildReadinessSignal,
   buildStarterSummary,
   getRecommendations,
   keyRisks,
@@ -109,6 +111,77 @@ function labelize(value: string) {
     .join(" ");
 }
 
+function slugify(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+}
+
+function programElementId(programName?: string) {
+  return `program-${slugify(programName || "unnamed-program")}`;
+}
+
+function stackLineKey(source: string) {
+  return `stack-${slugify(source)}`;
+}
+
+function textMatches(value: string | undefined, terms: string[]) {
+  const text = (value || "").toLowerCase();
+  return terms.some((term) => text.includes(term));
+}
+
+function findBestProgram(scored: ScoredProgram[], terms: string[], section?: FundingSection) {
+  return scored.find((item) => (!section || item.section === section) && textMatches(item.program["Program Name"], terms));
+}
+
+function matchStackLineToProgram(line: StackLine, scored: ScoredProgram[]) {
+  const source = line.source.toLowerCase();
+  if (source.includes("lihtc")) return findBestProgram(scored, ["low-income housing tax credit"]);
+  if (source.includes("homekey")) return findBestProgram(scored, ["homekey"]);
+  if (source.includes("no place like home")) return findBestProgram(scored, ["no place like home"]);
+  if (source.includes("multifamily housing program") || source.includes("state")) return findBestProgram(scored, ["multifamily housing program", "no place like home", "homekey"]);
+  if (source.includes("local gap") || source.includes("lacda") || source.includes("home") || source.includes("ahtf")) {
+    return findBestProgram(scored, ["development authority multifamily nofa", "home investment", "affordable housing trust fund"], "Recommended capital sources");
+  }
+  if (source.includes("permanent loan")) {
+    return (
+      findBestProgram(scored, ["project-based voucher", "housing choice voucher"], "Recommended rental subsidies") ||
+      findBestProgram(scored, ["housing innovation fund"], "Recommended capital sources") ||
+      scored.find((item) => item.section === "Recommended capital sources")
+    );
+  }
+  if (source.includes("philanthropic") || source.includes("flexible")) return findBestProgram(scored, ["philanthropic"]);
+  if (source.includes("rental") || source.includes("voucher") || source.includes("coc") || source.includes("fyi") || source.includes("fup")) {
+    return findBestProgram(scored, ["project-based voucher", "continuum of care", "foster youth", "family unification", "housing choice voucher"], "Recommended rental subsidies");
+  }
+  if (source.includes("dmh") || source.includes("bhsa") || source.includes("lahsa") || source.includes("hhap") || source.includes("services")) {
+    return findBestProgram(scored, ["behavioral health", "department of mental health", "homeless services authority", "homeless housing"], "Recommended operating / service funding");
+  }
+  return scored.find((item) => item.section === "Recommended capital sources") || scored[0];
+}
+
+function matchProgramToStackLine(program: Program, estimate: CapitalStackEstimate) {
+  const name = (program["Program Name"] || "").toLowerCase();
+  const allLines = [...estimate.lines, ...estimate.operatingLines];
+  if (name.includes("low-income housing tax credit")) return allLines.find((line) => line.source.toLowerCase().includes("lihtc"));
+  if (name.includes("homekey")) return allLines.find((line) => line.source.toLowerCase().includes("homekey"));
+  if (name.includes("no place like home") || name.includes("multifamily housing program")) {
+    return allLines.find((line) => textMatches(line.source, ["no place like home", "multifamily housing program", "state"]));
+  }
+  if (name.includes("home investment") || name.includes("affordable housing trust fund") || name.includes("development authority multifamily nofa")) {
+    return allLines.find((line) => textMatches(line.source, ["local gap", "home", "ahtf", "lacda"]));
+  }
+  if (name.includes("voucher") || name.includes("rental assistance") || name.includes("continuum of care")) {
+    return allLines.find((line) => textMatches(line.source, ["rental", "voucher", "coc", "fyi", "fup"]));
+  }
+  if (name.includes("philanthropic")) return allLines.find((line) => textMatches(line.source, ["philanthropic", "flexible"]));
+  if (textMatches(name, ["behavioral health", "mental health", "lahsa", "homeless housing"])) {
+    return allLines.find((line) => textMatches(line.source, ["dmh", "bhsa", "lahsa", "hhap", "services", "service funding"]));
+  }
+  return undefined;
+}
+
 function SelectField<T extends keyof typeof options>({
   id,
   label,
@@ -149,7 +222,7 @@ function SelectField<T extends keyof typeof options>({
 }
 
 function ScoreBar({ score }: { score: number }) {
-  const tone = score >= 80 ? "bg-emerald-500" : score >= 60 ? "bg-indigo-500" : "bg-slate-400";
+  const tone = score >= 90 ? "bg-emerald-600" : score >= 75 ? "bg-emerald-500" : score >= 55 ? "bg-indigo-500" : score >= 35 ? "bg-amber-500" : "bg-slate-400";
   return (
     <div className="grid gap-1">
       <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -179,7 +252,24 @@ function Badge({ children, tone = "neutral" }: { children: React.ReactNode; tone
   );
 }
 
-function ProgramCard({ item }: { item: ScoredProgram }) {
+function bandTone(band: ScoredProgram["scoreBand"]): keyof typeof categoryTone {
+  if (band === "Core fit" || band === "Strong fit") return "services";
+  if (band === "Conditional fit") return "capital";
+  if (band === "Possible but limited") return "risk";
+  return "neutral";
+}
+
+function ProgramCard({
+  item,
+  selected,
+  highlighted,
+  onSelect
+}: {
+  item: ScoredProgram;
+  selected: boolean;
+  highlighted: boolean;
+  onSelect: (item: ScoredProgram) => void;
+}) {
   const program = item.program;
   const officialUrl = program["Official Source"];
   const category = program["Funding Category"] || "Funding category not listed";
@@ -194,12 +284,24 @@ function ProgramCard({ item }: { item: ScoredProgram }) {
         : "neutral";
 
   return (
-    <article className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-indigo-200 hover:shadow-md">
+    <article
+      id={programElementId(program["Program Name"])}
+      tabIndex={0}
+      onClick={() => onSelect(item)}
+      onFocus={() => onSelect(item)}
+      className={`scroll-mt-6 rounded-xl border bg-white p-4 shadow-sm outline-none transition duration-300 hover:border-indigo-200 hover:shadow-md ${
+        highlighted
+          ? "border-emerald-300 ring-4 ring-emerald-200"
+          : selected
+            ? "border-indigo-300 ring-2 ring-indigo-200"
+            : "border-slate-200"
+      }`}
+    >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <div className="mb-2 flex flex-wrap gap-2">
             <Badge tone={categoryToneKey}>{category}</Badge>
-            {item.score >= 80 ? <Badge tone="services">High Fit</Badge> : null}
+            <Badge tone={bandTone(item.scoreBand)}>{item.scoreBand}</Badge>
             {requiresSiteControl ? <Badge tone="risk">Requires Site Control</Badge> : null}
             {nonprofitFriendly ? <Badge tone="neutral">Nonprofit Friendly</Badge> : null}
           </div>
@@ -215,8 +317,17 @@ function ProgramCard({ item }: { item: ScoredProgram }) {
         <div className="rounded-lg bg-indigo-50/70 p-3">
           <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-950">
             <Info className="h-4 w-4" />
-            Why this fits
+            Why recommended?
           </div>
+          {item.reasonCodes.length > 0 ? (
+            <div className="mb-3 flex flex-wrap gap-1.5">
+              {item.reasonCodes.map((code) => (
+                <span key={code} className="rounded-full border border-indigo-100 bg-white px-2 py-0.5 text-xs font-medium text-indigo-700">
+                  {code}
+                </span>
+              ))}
+            </div>
+          ) : null}
           <ul className="space-y-1 text-sm leading-5 text-slate-600">
             {item.reasons.map((reason) => (
               <li key={reason}>{reason}</li>
@@ -244,6 +355,22 @@ function ProgramCard({ item }: { item: ScoredProgram }) {
         <p>
           <strong className="text-slate-950">Key partners:</strong> {program["Key Partners"] || program["Administering Agency"] || "Not specified"}
         </p>
+      </div>
+
+      <div className="mt-4 rounded-lg border border-emerald-100 bg-emerald-50/60 p-3">
+        <div className="mb-1 flex items-center gap-2 text-sm font-semibold text-slate-950">
+          <ListChecks className="h-4 w-4 text-emerald-700" />
+          Next Steps
+        </div>
+        <p className="mb-3 text-xs leading-5 text-slate-500">Common early actions to explore this source; not a mandatory checklist.</p>
+        <ul className="grid gap-2 text-sm leading-5 text-slate-700">
+          {item.nextSteps.map((step) => (
+            <li key={step} className="flex gap-2">
+              <span className="mt-0.5 h-4 w-4 shrink-0 rounded border border-slate-300 bg-white" aria-hidden="true" />
+              <span>{step}</span>
+            </li>
+          ))}
+        </ul>
       </div>
 
       <div className="mt-4 flex flex-wrap gap-2">
@@ -315,7 +442,7 @@ function MetricCard({ label, value, note }: { label: string; value: string; note
   );
 }
 
-function StackBar({ estimate }: { estimate: CapitalStackEstimate }) {
+function StackBar({ estimate, selectedStackSource }: { estimate: CapitalStackEstimate; selectedStackSource?: string }) {
   const colors = ["bg-indigo-600", "bg-emerald-500", "bg-sky-500", "bg-slate-500", "bg-amber-500"];
   if (!estimate.isCapitalProject) {
     return (
@@ -331,7 +458,9 @@ function StackBar({ estimate }: { estimate: CapitalStackEstimate }) {
         {estimate.lines.map((line, index) => (
           <div
             key={line.source}
-            className={`${colors[index % colors.length]} transition-all`}
+            className={`${colors[index % colors.length]} transition-all duration-300 ${
+              selectedStackSource && selectedStackSource !== line.source ? "opacity-40" : "opacity-100"
+            }`}
             style={{ width: `${line.percent || 0}%` }}
             title={`${line.source}: ${line.percent}%`}
           />
@@ -349,43 +478,91 @@ function StackBar({ estimate }: { estimate: CapitalStackEstimate }) {
   );
 }
 
-function StackLineTable({ estimate }: { estimate: CapitalStackEstimate }) {
+function stackCategoryBadge(category: string) {
+  const text = category.toLowerCase();
+  if (text.includes("rental")) return { label: "Rental Subsidy", className: "border-sky-200 bg-sky-50 text-sky-700" };
+  if (text.includes("service")) return { label: "Services", className: "border-emerald-200 bg-emerald-50 text-emerald-700" };
+  if (text.includes("operating")) return { label: "Operating", className: "border-emerald-200 bg-emerald-50 text-emerald-700" };
+  if (text.includes("debt") || text.includes("loan")) return { label: "Debt", className: "border-slate-300 bg-slate-100 text-slate-700" };
+  if (text.includes("philanthropic") || text.includes("flexible")) return { label: "Philanthropy", className: "border-amber-200 bg-amber-50 text-amber-800" };
+  return { label: "Capital", className: "border-indigo-200 bg-indigo-50 text-indigo-700" };
+}
+
+function stackImportance(line: StackLine) {
+  const text = `${line.source} ${line.role} ${line.category}`.toLowerCase();
+  if (text.includes("lihtc") || text.includes("primary")) return { stars: "★★★★★", label: "Primary capital source" };
+  if (text.includes("gap") || text.includes("state") || text.includes("local")) return { stars: "★★★★", label: "Gap financing" };
+  if (text.includes("rental") || text.includes("service") || text.includes("operating")) return { stars: "★★★", label: "Operating support" };
+  if (text.includes("loan") || text.includes("debt") || text.includes("residual") || text.includes("philanthropic")) return { stars: "★★", label: "Residual financing" };
+  return { stars: "★★★", label: "Supporting source" };
+}
+
+function StackLineTable({
+  estimate,
+  selectedStackSource,
+  onSelectLine
+}: {
+  estimate: CapitalStackEstimate;
+  selectedStackSource?: string;
+  onSelectLine: (line: StackLine) => void;
+}) {
   const lines = estimate.isCapitalProject ? estimate.lines : estimate.operatingLines;
 
   return (
     <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-      <div className="grid grid-cols-[minmax(170px,1.35fr)_minmax(112px,0.7fr)_minmax(72px,0.45fr)_minmax(135px,0.9fr)_minmax(180px,1.25fr)] gap-0 border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold uppercase tracking-wide text-slate-500 max-xl:hidden">
+      <div className="grid grid-cols-[minmax(170px,1.15fr)_minmax(112px,0.65fr)_minmax(72px,0.42fr)_minmax(130px,0.75fr)_minmax(130px,0.8fr)_minmax(190px,1.25fr)] gap-0 border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold uppercase tracking-wide text-slate-500 max-xl:hidden">
         <div>Source</div>
-        <div>Amount</div>
+        <div>Illustrative Amount</div>
         <div>Percent</div>
-        <div>Role</div>
+        <div>Typical Role</div>
+        <div>Importance</div>
         <div>Why included</div>
       </div>
       <div className="divide-y divide-slate-200">
-        {lines.map((line) => (
-          <div
-            key={line.source}
-            className="grid gap-2 px-3 py-3 text-sm text-slate-600 xl:grid-cols-[minmax(170px,1.35fr)_minmax(112px,0.7fr)_minmax(72px,0.45fr)_minmax(135px,0.9fr)_minmax(180px,1.25fr)]"
-          >
-            <div>
-              <div className="font-semibold text-slate-950">{line.source}</div>
-              <div className="mt-1 text-xs text-slate-500 xl:hidden">{line.category}</div>
-            </div>
-            <div className="font-semibold text-slate-950">{formatCurrency(line.amount)}</div>
-            <div>{line.percent === null ? "n/a" : `${line.percent}%`}</div>
-            <div>
+        {lines.map((line) => {
+          const badge = stackCategoryBadge(line.category);
+          const importance = stackImportance(line);
+          const selected = selectedStackSource === line.source;
+          return (
+            <button
+              key={line.source}
+              type="button"
+              onClick={() => onSelectLine(line)}
+              className={`grid w-full gap-2 px-3 py-3 text-left text-sm transition duration-200 xl:grid-cols-[minmax(170px,1.15fr)_minmax(112px,0.65fr)_minmax(72px,0.42fr)_minmax(130px,0.75fr)_minmax(130px,0.8fr)_minmax(190px,1.25fr)] ${
+                selected
+                  ? "relative z-10 bg-indigo-50 text-slate-900 ring-2 ring-indigo-300"
+                  : "bg-white text-slate-600 hover:-translate-y-0.5 hover:bg-slate-50 hover:shadow-md"
+              }`}
+            >
+              <div>
+                <div className="font-semibold text-slate-950">{line.source}</div>
+                <span className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${badge.className}`}>{badge.label}</span>
+              </div>
+              <div className="font-semibold text-slate-950">{formatCurrency(line.amount)}</div>
+              <div>{line.percent === null ? "n/a" : `${line.percent}%`}</div>
               <div>{line.role}</div>
-              <div className="mt-1 hidden text-xs text-slate-500 xl:block">{line.category}</div>
-            </div>
-            <div className="leading-5">{line.whyIncluded}</div>
-          </div>
-        ))}
+              <div>
+                <div className="font-semibold text-amber-600">{importance.stars}</div>
+                <div className="text-xs text-slate-500">{importance.label}</div>
+              </div>
+              <div className="leading-5">{line.whyIncluded}</div>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-function IllustrativeCapitalStack({ estimate }: { estimate: CapitalStackEstimate }) {
+function IllustrativeCapitalStack({
+  estimate,
+  selectedStackSource,
+  onSelectLine
+}: {
+  estimate: CapitalStackEstimate;
+  selectedStackSource?: string;
+  onSelectLine: (line: StackLine) => void;
+}) {
   return (
     <section className="grid gap-5 rounded-2xl border border-indigo-100 bg-white p-5 shadow-panel">
       <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
@@ -425,9 +602,9 @@ function IllustrativeCapitalStack({ estimate }: { estimate: CapitalStackEstimate
         />
       </div>
 
-      <StackBar estimate={estimate} />
+      <StackBar estimate={estimate} selectedStackSource={selectedStackSource} />
 
-      <StackLineTable estimate={estimate} />
+      <StackLineTable estimate={estimate} selectedStackSource={selectedStackSource} onSelectLine={onSelectLine} />
 
       <div className="grid gap-2 rounded-xl bg-slate-50 p-4 text-sm leading-6 text-slate-600">
         {estimate.notes.map((note) => (
@@ -454,14 +631,7 @@ function ExecutiveStrategySummary({
   recommendations: ScoredProgram[];
   risks: string[];
 }) {
-  const topFive = recommendations.slice(0, 5);
-  const readinessScore = Math.max(
-    0,
-    Math.min(
-      100,
-      Math.round((topFive.reduce((sum, item) => sum + item.score, 0) / Math.max(1, topFive.length)) - (profile.siteStatus === "no site" ? 8 : 0))
-    )
-  );
+  const readiness = buildReadinessSignal(profile, recommendations);
   const primaryCapital = recommendations.find((item) => item.section === "Recommended capital sources")?.program["Program Name"] || "Capital source to confirm";
   const rentalSubsidy = recommendations.find((item) => item.section === "Recommended rental subsidies")?.program["Program Name"] || "Rental subsidy to confirm";
   const serviceFunding =
@@ -486,17 +656,39 @@ function ExecutiveStrategySummary({
           <p className="mt-3 text-sm leading-6 text-slate-600">{summary}</p>
         </div>
         <div className="rounded-2xl bg-slate-950 px-5 py-4 text-white shadow-sm">
-          <div className="text-xs font-semibold uppercase tracking-wide text-white/60">Readiness score</div>
-          <div className="mt-1 text-4xl font-semibold">{readinessScore}</div>
-          <div className="text-xs text-white/70">Illustrative fit signal</div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-white/60">Project readiness signal</div>
+          <div className="mt-1 text-4xl font-semibold">{readiness.score}</div>
+          <div className="text-xs text-white/70">{readiness.band}</div>
         </div>
       </div>
+      <p className="mt-4 max-w-4xl text-xs leading-5 text-slate-500">
+        Scores are directional planning signals based on the current profile and static program data. They do not indicate funding approval,
+        underwriting feasibility, or a financing commitment.
+      </p>
       <div className="mt-5 grid gap-3 md:grid-cols-5">
         {takeaways.map((takeaway) => (
           <div key={takeaway} className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm leading-5 text-slate-700">
             {takeaway}
           </div>
         ))}
+      </div>
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 p-3">
+          <div className="text-xs font-bold uppercase tracking-wide text-emerald-700">Readiness drivers</div>
+          <ul className="mt-2 space-y-1 text-sm leading-5 text-slate-700">
+            {(readiness.drivers.length ? readiness.drivers : ["No major readiness drivers identified yet."]).map((driver) => (
+              <li key={driver}>{driver}</li>
+            ))}
+          </ul>
+        </div>
+        <div className="rounded-xl border border-amber-100 bg-amber-50/70 p-3">
+          <div className="text-xs font-bold uppercase tracking-wide text-amber-700">Readiness cautions</div>
+          <ul className="mt-2 space-y-1 text-sm leading-5 text-slate-700">
+            {(readiness.cautions.length ? readiness.cautions : ["No major readiness cautions identified."]).map((caution) => (
+              <li key={caution}>{caution}</li>
+            ))}
+          </ul>
+        </div>
       </div>
     </section>
   );
@@ -505,7 +697,12 @@ function ExecutiveStrategySummary({
 export function Explorer({ initialProfile = defaultProfile }: { initialProfile?: ProjectProfile }) {
   const [profile, setProfile] = React.useState<ProjectProfile>(initialProfile);
   const [formVersion, setFormVersion] = React.useState(0);
+  const [expandedSections, setExpandedSections] = React.useState<Partial<Record<FundingSection, boolean>>>({});
+  const [selectedStackSource, setSelectedStackSource] = React.useState<string>();
+  const [selectedProgramName, setSelectedProgramName] = React.useState<string>();
+  const [highlightedProgramName, setHighlightedProgramName] = React.useState<string>();
   const formRef = React.useRef<HTMLFormElement>(null);
+  const highlightTimeoutRef = React.useRef<number | undefined>(undefined);
   const recommendations = getRecommendations(programs, profile);
   const starterSummary = buildStarterSummary(profile, recommendations.scored);
   const capitalStackEstimate = buildCapitalStackEstimate(profile);
@@ -539,6 +736,38 @@ export function Explorer({ initialProfile = defaultProfile }: { initialProfile?:
     });
   }
 
+  function brieflyHighlightProgram(programName: string) {
+    window.clearTimeout(highlightTimeoutRef.current);
+    setHighlightedProgramName(programName);
+    highlightTimeoutRef.current = window.setTimeout(() => setHighlightedProgramName(undefined), 1800);
+  }
+
+  function handleSelectStackLine(line: StackLine) {
+    const match = matchStackLineToProgram(line, recommendations.scored);
+    setSelectedStackSource(line.source);
+    if (!match) return;
+
+    const programName = match.program["Program Name"] || "";
+    setSelectedProgramName(programName);
+    setExpandedSections((current) => ({ ...current, [match.section]: true }));
+
+    window.setTimeout(() => {
+      document.getElementById(programElementId(programName))?.scrollIntoView({ behavior: "smooth", block: "center" });
+      brieflyHighlightProgram(programName);
+    }, 80);
+  }
+
+  function handleSelectProgram(item: ScoredProgram) {
+    const programName = item.program["Program Name"] || "";
+    setSelectedProgramName(programName);
+    const matchingLine = matchProgramToStackLine(item.program, capitalStackEstimate);
+    if (matchingLine) setSelectedStackSource(matchingLine.source);
+  }
+
+  React.useEffect(() => {
+    return () => window.clearTimeout(highlightTimeoutRef.current);
+  }, []);
+
   return (
     <div className="min-h-screen">
       <header className="border-b border-white/70 bg-white/70 backdrop-blur">
@@ -565,7 +794,7 @@ export function Explorer({ initialProfile = defaultProfile }: { initialProfile?:
               </div>
               <div className="rounded-xl bg-sky-50 p-3">
                 <div className="text-2xl font-semibold text-sky-700">{recommendations.scored[0]?.score || 0}</div>
-                <div className="text-xs text-slate-600">Top fit</div>
+                <div className="text-xs text-slate-600">Top Program Fit</div>
               </div>
             </div>
           </div>
@@ -659,10 +888,12 @@ export function Explorer({ initialProfile = defaultProfile }: { initialProfile?:
           <InsightList title="Key risks" icon={<AlertTriangle className="h-5 w-5 text-amber-600" />} items={riskItems} />
         </div>
 
-        <IllustrativeCapitalStack estimate={capitalStackEstimate} />
+        <IllustrativeCapitalStack estimate={capitalStackEstimate} selectedStackSource={selectedStackSource} onSelectLine={handleSelectStackLine} />
 
         {sections.map((section) => {
           const items = recommendations.bySection[section];
+          const expanded = Boolean(expandedSections[section]);
+          const visibleItems = expanded ? items : items.slice(0, section === "Likely philanthropic gaps" ? 4 : 5);
           return (
             <div key={section} className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex items-center justify-between gap-3">
@@ -673,12 +904,20 @@ export function Explorer({ initialProfile = defaultProfile }: { initialProfile?:
                   </h2>
                   <p className="mt-1 text-sm leading-6 text-slate-500">{sectionDescriptions[section]}</p>
                 </div>
-                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">{items.length} shown</span>
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                  {visibleItems.length} of {items.length} shown
+                </span>
               </div>
-              {items.length > 0 ? (
+              {visibleItems.length > 0 ? (
                 <div className="grid gap-4">
-                  {items.map((item) => (
-                    <ProgramCard key={`${section}-${item.program["Program Name"]}`} item={item} />
+                  {visibleItems.map((item) => (
+                    <ProgramCard
+                      key={`${section}-${item.program["Program Name"]}`}
+                      item={item}
+                      selected={selectedProgramName === item.program["Program Name"]}
+                      highlighted={highlightedProgramName === item.program["Program Name"]}
+                      onSelect={handleSelectProgram}
+                    />
                   ))}
                 </div>
               ) : (
@@ -686,6 +925,23 @@ export function Explorer({ initialProfile = defaultProfile }: { initialProfile?:
                   No strong matches found for this section. Try broadening the housing model or population profile.
                 </div>
               )}
+              {items.length > visibleItems.length ? (
+                <button
+                  type="button"
+                  onClick={() => setExpandedSections((current) => ({ ...current, [section]: true }))}
+                  className="justify-self-start rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-indigo-300 hover:text-indigo-700"
+                >
+                  Show lower-scoring programs
+                </button>
+              ) : expanded && items.length > 5 ? (
+                <button
+                  type="button"
+                  onClick={() => setExpandedSections((current) => ({ ...current, [section]: false }))}
+                  className="justify-self-start rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-indigo-300 hover:text-indigo-700"
+                >
+                  Show fewer programs
+                </button>
+              ) : null}
             </div>
           );
         })}
