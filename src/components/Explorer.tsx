@@ -122,10 +122,6 @@ function programElementId(programName?: string) {
   return `program-${slugify(programName || "unnamed-program")}`;
 }
 
-function stackLineKey(source: string) {
-  return `stack-${slugify(source)}`;
-}
-
 function textMatches(value: string | undefined, terms: string[]) {
   const text = (value || "").toLowerCase();
   return terms.some((term) => text.includes(term));
@@ -442,32 +438,52 @@ function MetricCard({ label, value, note }: { label: string; value: string; note
   );
 }
 
-function StackBar({ estimate, selectedStackSource }: { estimate: CapitalStackEstimate; selectedStackSource?: string }) {
+function StackBar({
+  estimate,
+  selectedStackSource,
+  onSelectLine
+}: {
+  estimate: CapitalStackEstimate;
+  selectedStackSource?: string;
+  onSelectLine: (line: StackLine) => void;
+}) {
   const colors = ["bg-indigo-600", "bg-emerald-500", "bg-sky-500", "bg-slate-500", "bg-amber-500"];
-  if (!estimate.isCapitalProject) {
-    return (
-      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-        Annual subsidy view: rent support and service funding are shown as recurring needs rather than development sources.
-      </div>
-    );
-  }
+  const lines = estimate.isCapitalProject ? estimate.lines : estimate.operatingLines;
+  const fallbackWidth = lines.length ? 100 / lines.length : 100;
 
   return (
     <div className="grid gap-3">
-      <div className="flex h-5 overflow-hidden rounded-full bg-slate-100">
-        {estimate.lines.map((line, index) => (
-          <div
-            key={line.source}
-            className={`${colors[index % colors.length]} transition-all duration-300 ${
-              selectedStackSource && selectedStackSource !== line.source ? "opacity-40" : "opacity-100"
-            }`}
-            style={{ width: `${line.percent || 0}%` }}
-            title={`${line.source}: ${line.percent}%`}
-          />
-        ))}
+      {!estimate.isCapitalProject ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+          Annual subsidy view: rent support and service funding are shown as recurring needs rather than development sources.
+        </div>
+      ) : null}
+      <div className="flex h-7 overflow-hidden rounded-full bg-slate-100 shadow-inner">
+        {lines.map((line, index) => {
+          const selected = selectedStackSource === line.source;
+          const width = line.percent ?? fallbackWidth;
+          const percentLabel = line.percent === null ? "n/a" : `${line.percent}%`;
+          return (
+            <button
+              key={line.source}
+              type="button"
+              onClick={() => onSelectLine(line)}
+              aria-label={`Open recommendation for ${line.source}`}
+              title={`${line.source}\nAmount: ${formatCurrency(line.amount)}\nPercent: ${percentLabel}\nRole: ${line.role}`}
+              className={`${colors[index % colors.length]} relative h-full cursor-pointer transition duration-200 hover:z-10 hover:scale-y-125 hover:brightness-110 focus:z-10 focus:outline-none focus:ring-2 focus:ring-white focus:ring-offset-2 focus:ring-offset-slate-900 ${
+                selected ? "z-10 scale-y-125 brightness-110 ring-2 ring-white ring-offset-2 ring-offset-slate-900" : ""
+              } ${selectedStackSource && selectedStackSource !== line.source ? "opacity-45 hover:opacity-90" : "opacity-100"}`}
+              style={{ width: `${width}%` }}
+            >
+              <span className="sr-only">
+                {line.source}, {formatCurrency(line.amount)}, {percentLabel}, {line.role}
+              </span>
+            </button>
+          );
+        })}
       </div>
       <div className="flex flex-wrap gap-2">
-        {estimate.lines.map((line, index) => (
+        {lines.map((line, index) => (
           <span key={line.source} className="inline-flex items-center gap-2 text-xs text-slate-600">
             <span className={`h-2.5 w-2.5 rounded-full ${colors[index % colors.length]}`} />
             {line.source} {line.percent === null ? "" : `${line.percent}%`}
@@ -509,8 +525,8 @@ function StackLineTable({
   const lines = estimate.isCapitalProject ? estimate.lines : estimate.operatingLines;
 
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-      <div className="grid grid-cols-[minmax(170px,1.15fr)_minmax(112px,0.65fr)_minmax(72px,0.42fr)_minmax(130px,0.75fr)_minmax(130px,0.8fr)_minmax(190px,1.25fr)] gap-0 border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold uppercase tracking-wide text-slate-500 max-xl:hidden">
+    <div className="rounded-xl border border-slate-200 bg-white">
+      <div className="grid grid-cols-[minmax(150px,1fr)_minmax(108px,0.58fr)_minmax(64px,0.32fr)_minmax(112px,0.58fr)_minmax(112px,0.58fr)_minmax(260px,1.7fr)] gap-3 border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold uppercase tracking-wide text-slate-500 max-xl:hidden">
         <div>Source</div>
         <div>Illustrative Amount</div>
         <div>Percent</div>
@@ -528,24 +544,24 @@ function StackLineTable({
               key={line.source}
               type="button"
               onClick={() => onSelectLine(line)}
-              className={`grid w-full gap-2 px-3 py-3 text-left text-sm transition duration-200 xl:grid-cols-[minmax(170px,1.15fr)_minmax(112px,0.65fr)_minmax(72px,0.42fr)_minmax(130px,0.75fr)_minmax(130px,0.8fr)_minmax(190px,1.25fr)] ${
+              className={`grid w-full min-w-0 gap-3 px-3 py-3 text-left text-sm transition duration-200 xl:grid-cols-[minmax(150px,1fr)_minmax(108px,0.58fr)_minmax(64px,0.32fr)_minmax(112px,0.58fr)_minmax(112px,0.58fr)_minmax(260px,1.7fr)] ${
                 selected
                   ? "relative z-10 bg-indigo-50 text-slate-900 ring-2 ring-indigo-300"
                   : "bg-white text-slate-600 hover:-translate-y-0.5 hover:bg-slate-50 hover:shadow-md"
               }`}
             >
-              <div>
-                <div className="font-semibold text-slate-950">{line.source}</div>
+              <div className="min-w-0">
+                <div className="break-words font-semibold text-slate-950">{line.source}</div>
                 <span className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${badge.className}`}>{badge.label}</span>
               </div>
-              <div className="font-semibold text-slate-950">{formatCurrency(line.amount)}</div>
-              <div>{line.percent === null ? "n/a" : `${line.percent}%`}</div>
-              <div>{line.role}</div>
-              <div>
+              <div className="min-w-0 break-words font-semibold text-slate-950">{formatCurrency(line.amount)}</div>
+              <div className="min-w-0">{line.percent === null ? "n/a" : `${line.percent}%`}</div>
+              <div className="min-w-0 break-words">{line.role}</div>
+              <div className="min-w-0">
                 <div className="font-semibold text-amber-600">{importance.stars}</div>
-                <div className="text-xs text-slate-500">{importance.label}</div>
+                <div className="break-words text-xs text-slate-500">{importance.label}</div>
               </div>
-              <div className="leading-5">{line.whyIncluded}</div>
+              <div className="min-w-0 whitespace-normal break-words leading-5">{line.whyIncluded}</div>
             </button>
           );
         })}
@@ -602,7 +618,7 @@ function IllustrativeCapitalStack({
         />
       </div>
 
-      <StackBar estimate={estimate} selectedStackSource={selectedStackSource} />
+      <StackBar estimate={estimate} selectedStackSource={selectedStackSource} onSelectLine={onSelectLine} />
 
       <StackLineTable estimate={estimate} selectedStackSource={selectedStackSource} onSelectLine={onSelectLine} />
 
