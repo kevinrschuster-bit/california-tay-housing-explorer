@@ -24,6 +24,13 @@ import {
   UsersRound,
   Wand2
 } from "lucide-react";
+import {
+  defaultStrategyProfile,
+  scoreInterventions,
+  strategyOptions,
+  type ScoredIntervention,
+  type StrategyProfile
+} from "@/data/interventions";
 import programsData from "@/data/programs.json";
 import { buildCapitalStackEstimate, formatCurrency, type CapitalStackEstimate, type StackLine } from "@/lib/capitalStack";
 import {
@@ -37,6 +44,8 @@ import { defaultProfile } from "@/lib/profile";
 import type { FundingSection, Program, ProjectProfile, ScoredProgram } from "@/lib/types";
 
 const programs = programsData as Program[];
+
+type WorkflowTab = "finance" | "strategy";
 
 const options = {
   geography: ["City of Los Angeles", "Los Angeles County outside City of LA", "California statewide", "Unknown"],
@@ -710,7 +719,248 @@ function ExecutiveStrategySummary({
   );
 }
 
+type StrategyOptionKey = keyof typeof strategyOptions;
+
+function StrategySelect({
+  id,
+  label,
+  value,
+  helper,
+  onChange
+}: {
+  id: StrategyOptionKey;
+  label: string;
+  value: string;
+  helper?: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="grid gap-2 text-sm font-medium text-slate-900" htmlFor={`strategy-${id}`}>
+      <span>{label}</span>
+      <select
+        id={`strategy-${id}`}
+        value={String(value)}
+        onChange={(event) => onChange(event.currentTarget.value)}
+        className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-normal text-slate-900 shadow-sm outline-none transition hover:border-indigo-200 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
+      >
+        {strategyOptions[id].map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+      {helper ? <span className="text-xs leading-5 text-slate-500">{helper}</span> : null}
+    </label>
+  );
+}
+
+function interventionBandTone(band: ScoredIntervention["fitBand"]): keyof typeof categoryTone {
+  if (band === "Core strategy" || band === "Strong option") return "services";
+  if (band === "Conditional") return "capital";
+  return "neutral";
+}
+
+function InterventionCard({ intervention }: { intervention: ScoredIntervention }) {
+  return (
+    <article className="grid gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-indigo-200 hover:shadow-md">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <div className="mb-2 flex flex-wrap gap-2">
+            <Badge tone="neutral">{intervention.category}</Badge>
+            <Badge tone={interventionBandTone(intervention.fitBand)}>{intervention.fitBand}</Badge>
+          </div>
+          <h3 className="text-lg font-semibold text-slate-950">{intervention.name}</h3>
+          <p className="mt-2 text-sm leading-6 text-slate-600">{intervention.bestUseCase}</p>
+        </div>
+        <div className="min-w-32 rounded-xl bg-slate-950 px-4 py-3 text-white">
+          <div className="text-xs font-semibold uppercase tracking-wide text-white/60">Fit signal</div>
+          <div className="mt-1 text-3xl font-semibold">{intervention.score}</div>
+        </div>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <div className="rounded-xl bg-indigo-50/70 p-3">
+          <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-950">
+            <Info className="h-4 w-4" />
+            Why this fits
+          </div>
+          <ul className="space-y-1 text-sm leading-5 text-slate-600">
+            {(intervention.reasons.length ? intervention.reasons : [intervention.bestUseCase]).map((reason) => (
+              <li key={reason}>{reason}</li>
+            ))}
+          </ul>
+        </div>
+        <div className="rounded-xl bg-amber-50/80 p-3">
+          <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-950">
+            <AlertTriangle className="h-4 w-4" />
+            Tradeoffs
+          </div>
+          <ul className="space-y-1 text-sm leading-5 text-slate-600">
+            {intervention.tradeoffs.map((tradeoff) => (
+              <li key={tradeoff}>{tradeoff}</li>
+            ))}
+          </ul>
+        </div>
+      </div>
+
+      <div className="grid gap-3 text-sm text-slate-600 md:grid-cols-3">
+        <MetricCard label="Time to impact" value={intervention.timeToImpact} note={intervention.typicalScale} />
+        <MetricCard label="Capital intensity" value={intervention.capitalIntensity} note={intervention.estimatedCostPerYouth} />
+        <MetricCard label="Operating complexity" value={intervention.operatingIntensity} note={`Service intensity: ${intervention.serviceIntensity}`} />
+      </div>
+
+      <div className="grid gap-3 text-sm leading-6 text-slate-600 lg:grid-cols-2">
+        <p>
+          <strong className="text-slate-950">Likely partners:</strong> {intervention.likelyPartners}
+        </p>
+        <p>
+          <strong className="text-slate-950">Philanthropy role:</strong> {intervention.philanthropyRole}
+        </p>
+        <p>
+          <strong className="text-slate-950">When not to use:</strong> {intervention.whenNotToUse}
+        </p>
+        <p>
+          <strong className="text-slate-950">Project finance connection:</strong> {intervention.connectionToProjectFinance}
+        </p>
+      </div>
+
+      <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 p-3">
+        <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-950">
+          <ListChecks className="h-4 w-4 text-emerald-700" />
+          First next steps
+        </div>
+        <ul className="grid gap-2 text-sm leading-5 text-slate-700">
+          {intervention.nextSteps.slice(0, 3).map((step) => (
+            <li key={step} className="flex gap-2">
+              <span className="mt-0.5 h-4 w-4 shrink-0 rounded border border-slate-300 bg-white" aria-hidden="true" />
+              <span>{step}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </article>
+  );
+}
+
+function StrategyComparisonTable({ interventions }: { interventions: ScoredIntervention[] }) {
+  return (
+    <section className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div>
+        <h2 className="text-lg font-semibold text-slate-950">Intervention Comparison</h2>
+        <p className="mt-1 text-sm leading-6 text-slate-500">Scan relative timing, capital needs, operating complexity, and best use cases.</p>
+      </div>
+      <div className="overflow-hidden rounded-xl border border-slate-200">
+        <div className="grid grid-cols-[minmax(160px,1fr)_minmax(100px,0.55fr)_minmax(105px,0.55fr)_minmax(120px,0.65fr)_minmax(220px,1.4fr)] gap-3 border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold uppercase tracking-wide text-slate-500 max-lg:hidden">
+          <div>Intervention</div>
+          <div>Time to impact</div>
+          <div>Capital intensity</div>
+          <div>Operating complexity</div>
+          <div>Best use case</div>
+        </div>
+        <div className="divide-y divide-slate-200">
+          {interventions.map((intervention) => (
+            <div
+              key={intervention.name}
+              className="grid gap-2 px-3 py-3 text-sm text-slate-600 lg:grid-cols-[minmax(160px,1fr)_minmax(100px,0.55fr)_minmax(105px,0.55fr)_minmax(120px,0.65fr)_minmax(220px,1.4fr)]"
+            >
+              <div className="font-semibold text-slate-950">{intervention.name}</div>
+              <div>{intervention.timeToImpact}</div>
+              <div>{intervention.capitalIntensity}</div>
+              <div>{intervention.operatingIntensity}</div>
+              <div className="leading-5">{intervention.bestUseCase}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function StrategyExplorer() {
+  const [profile, setProfile] = React.useState<StrategyProfile>(defaultStrategyProfile);
+  const interventions = React.useMemo(() => scoreInterventions(profile), [profile]);
+  const topInterventions = interventions.slice(0, 3);
+
+  function update(key: keyof StrategyProfile, value: string) {
+    setProfile((current) => ({ ...current, [key]: value }) as StrategyProfile);
+  }
+
+  return (
+    <main className="mx-auto grid w-full max-w-7xl gap-6 px-4 py-6 lg:grid-cols-[390px_minmax(0,1fr)] lg:px-6">
+      <aside className="lg:sticky lg:top-6 lg:h-[calc(100vh-48px)]">
+        <div className="flex h-full flex-col rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-panel backdrop-blur">
+          <div className="mb-5 flex items-start justify-between gap-4 px-1">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-700">Strategy Explorer</p>
+              <h2 className="mt-2 text-2xl font-semibold leading-tight text-slate-950">Frame the challenge</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-500">Explore which housing interventions to investigate first.</p>
+            </div>
+            <Search className="mt-1 h-6 w-6 shrink-0 text-emerald-600" />
+          </div>
+          <div className="grid gap-4 overflow-auto pr-1">
+            <BuilderSection title="Population & Challenge" icon={<UsersRound className="h-4 w-4" />}>
+              <StrategySelect id="population" label="Population served" value={profile.population} onChange={(value) => update("population", value)} />
+              <StrategySelect id="challenge" label="Primary housing challenge" value={profile.challenge} onChange={(value) => update("challenge", value)} />
+              <StrategySelect id="serviceIntensity" label="Service intensity" value={profile.serviceIntensity} onChange={(value) => update("serviceIntensity", value)} />
+            </BuilderSection>
+            <BuilderSection title="Implementation Context" icon={<MapPinned className="h-4 w-4" />}>
+              <StrategySelect id="geography" label="Geography" value={profile.geography} onChange={(value) => update("geography", value)} />
+              <StrategySelect id="timeHorizon" label="Time horizon" value={profile.timeHorizon} onChange={(value) => update("timeHorizon", value)} />
+              <StrategySelect id="scale" label="Scale" value={profile.scale} onChange={(value) => update("scale", value)} />
+              <StrategySelect
+                id="flexibleCapital"
+                label="Available flexible capital"
+                value={profile.flexibleCapital}
+                helper="Flexible capital changes whether rapid access, acquisition, or development strategies are plausible."
+                onChange={(value) => update("flexibleCapital", value)}
+              />
+            </BuilderSection>
+          </div>
+        </div>
+      </aside>
+
+      <section className="grid min-w-0 gap-6">
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-panel">
+          <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em] text-emerald-700">
+            <Sparkles className="h-4 w-4" />
+            Recommended Strategy Mix
+          </p>
+          <h2 className="mt-2 text-2xl font-semibold text-slate-950">Start with {topInterventions.map((item) => item.name).join(", ")}</h2>
+          <p className="mt-3 max-w-4xl text-sm leading-6 text-slate-600">
+            For {profile.population.toLowerCase()} facing {profile.challenge.toLowerCase()}, the strongest near-term mix is to combine the
+            highest-fit intervention with complementary housing access, subsidy, service, or capital strategies. Treat this as a planning signal
+            for discussion with practitioners and affected youth.
+          </p>
+          <div className="mt-5 grid gap-3 md:grid-cols-3">
+            {topInterventions.map((item) => (
+              <div key={item.name} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{item.fitBand}</div>
+                <div className="mt-1 font-semibold text-slate-950">{item.name}</div>
+                <div className="mt-1 text-sm text-slate-600">{item.timeToImpact}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <div className="grid gap-4">
+          {interventions.map((intervention) => (
+            <InterventionCard key={intervention.name} intervention={intervention} />
+          ))}
+        </div>
+
+        <StrategyComparisonTable interventions={interventions} />
+
+        <div className="rounded-2xl border border-slate-200 bg-white/80 p-4 text-sm leading-6 text-slate-600">
+          This Strategy Explorer is an illustrative planning tool, not a policy recommendation engine. Outputs are directional and should be validated
+          with practitioners, public agencies, service providers, and affected youth.
+        </div>
+      </section>
+    </main>
+  );
+}
+
 export function Explorer({ initialProfile = defaultProfile }: { initialProfile?: ProjectProfile }) {
+  const [activeTab, setActiveTab] = React.useState<WorkflowTab>("finance");
   const [profile, setProfile] = React.useState<ProjectProfile>(initialProfile);
   const [formVersion, setFormVersion] = React.useState(0);
   const [expandedSections, setExpandedSections] = React.useState<Partial<Record<FundingSection, boolean>>>({});
@@ -798,6 +1048,26 @@ export function Explorer({ initialProfile = defaultProfile }: { initialProfile?:
               <p className="mt-4 max-w-3xl text-base leading-7 text-slate-600 md:text-lg">
                 Design a housing project and explore potential financing, subsidy, service, and partnership strategies for transition-aged youth housing.
               </p>
+              <div className="mt-6 inline-flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("finance")}
+                  className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
+                    activeTab === "finance" ? "bg-indigo-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-50 hover:text-slate-950"
+                  }`}
+                >
+                  Project Finance Explorer
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("strategy")}
+                  className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
+                    activeTab === "strategy" ? "bg-emerald-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-50 hover:text-slate-950"
+                  }`}
+                >
+                  Strategy Explorer
+                </button>
+              </div>
             </div>
             <div className="grid grid-cols-3 gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
               <div className="rounded-xl bg-indigo-50 p-3">
@@ -817,6 +1087,7 @@ export function Explorer({ initialProfile = defaultProfile }: { initialProfile?:
         </div>
       </header>
 
+      {activeTab === "finance" ? (
       <main className="mx-auto grid w-full max-w-7xl gap-6 px-4 py-6 lg:grid-cols-[390px_minmax(0,1fr)] lg:px-6">
         <aside className="lg:sticky lg:top-6 lg:h-[calc(100vh-48px)]">
         <form
@@ -968,6 +1239,9 @@ export function Explorer({ initialProfile = defaultProfile }: { initialProfile?:
         </div>
       </section>
       </main>
+      ) : (
+        <StrategyExplorer />
+      )}
     </div>
   );
 }
